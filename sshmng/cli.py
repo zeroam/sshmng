@@ -1,43 +1,13 @@
 """Console script for sshmng."""
+import os
 import sys
 import click
-import pickle
 import subprocess
+import tempfile
 from pathlib import Path
 from pprint import pprint
-from typing import Dict
 
-
-class Repo(object):
-    """File Repository Class
-    have path for home directory, data path
-    get hosts, and save hosts with get_hosts(), save_hosts()
-    """
-    def __init__(self, debug=False):
-        self.home = Path.home() / ".sshmng"
-        self._db = self.home / "hosts.pkl"
-        self.debug = debug
-
-    @property
-    def home(self):
-        return self._home
-
-    @home.setter
-    def home(self, path: Path):
-        path.mkdir(exist_ok=True)
-        self._home = path
-
-    def load_hosts(self):
-        if not self._db.exists():
-            return {}
-
-        with self._db.open("rb") as f:
-            hosts = pickle.load(f)
-        return hosts
-
-    def save_hosts(self, hosts: Dict[str, str]):
-        with self._db.open("wb") as f:
-            pickle.dump(hosts, f)
+from sshmng.repo import Repo
 
 
 @click.group()
@@ -53,7 +23,8 @@ def list(repo: Repo):
     hosts = repo.load_hosts()
 
     # TODO: print host info more pretty (+ colors)
-    pprint(hosts)
+    for name, host in hosts.items():
+        print(f"- {name}: {host['username']}@{host['host']}:{host['port']}")
 
 
 @main.command()
@@ -62,7 +33,9 @@ def list(repo: Repo):
 def add(repo: Repo, name):
     hosts = repo.load_hosts()
     if hosts.get(name):
-        replace = input(f"The connection for {name} already exists.\nDo you want to replace? [y/N] ")
+        replace = input(
+            f"The connection for {name} already exists.\nDo you want to replace? [y/N] "
+        )
         if replace.lower() != "y":
             print("Canceled add host")
             return
@@ -73,11 +46,25 @@ def add(repo: Repo, name):
     username = input("Enter user name: ")
     address = input("Enter server address: ")
     port = int(input("Enter ssh port[22]: ") or 22)
+    private_key_path = input(f"Enter private key path[{repo.private_key}]: ")
+    if not private_key_path:
+        private_key = repo.private_key.read_text()
 
-    # TODO: add ssh-copy-id logic
-    # TODO: check add pem file instead
+        # add ssh-copy-id logic
+        subprocess.call(
+            f'cat {repo.public_key} | ssh -p {port} {username}@{address} "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys"',
+            shell=True,
+        )
+    else:
+        # check add pem file instead
+        private_key = Path(private_key_path).read_text()
 
-    hosts[name] = {"username": username, "host": address, "port": port}
+    hosts[name] = {
+        "username": username,
+        "host": address,
+        "port": port,
+        "private_key": private_key,
+    }
     repo.save_hosts(hosts)
 
     print(f"Saved {name}")
@@ -93,7 +80,16 @@ def connect(repo: Repo, name):
         return sys.exit(1)
 
     # TODO: check if pem file exists
-    subprocess.call(f"ssh -p {host['port']} {host['username']}@{host['host']}", shell=True)
+    with tempfile.NamedTemporaryFile("w") as fp:
+        fp.write(host["private_key"])
+        fp.flush()
+
+        temppath = os.path.join(tempfile.gettempdir(), fp.name)
+        print(temppath)
+        subprocess.call(
+            f"ssh -i {temppath} -p {host['port']} {host['username']}@{host['host']}",
+            shell=True,
+        )
 
 
 @main.command()
@@ -105,7 +101,9 @@ def delete(repo: Repo, name):
         print(f"connection for '{name}' not exists")
         return sys.exit(1)
 
-    replace = input(f"connection for '{name}' permenantly deleted. Are you sure? [y/N] ")
+    replace = input(
+        f"connection for '{name}' permenantly deleted. Are you sure? [y/N] "
+    )
     if replace.lower() != "y":
         return
 
@@ -124,7 +122,18 @@ def exec(repo: Repo, name, command):
         print(f"connection for '{name}' not exists")
         return sys.exit(1)
 
-    subprocess.call(f"ssh -p {host['port']} {host['username']}@{host['host']} '{' '.join(command)}'", shell=True)
+    with tempfile.NamedTemporaryFile("w") as fp:
+        fp.write(host["private_key"])
+        fp.flush()
+
+        temppath = os.path.join(tempfile.gettempdir(), fp.name)
+        print(temppath)
+
+        subprocess.call(
+            f"ssh -i {temppath} -p {host['port']} {host['username']}@{host['host']} '{' '.join(command)}'",
+            shell=True,
+        )
+
 
 if __name__ == "__main__":
     sys.exit(main())  # pragma: no cover
