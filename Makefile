@@ -83,3 +83,12 @@ dist: clean ## builds source and wheel package
 
 install: clean ## install the package to the active Python's site-packages
 	python setup.py install
+
+check: ## check with isort, black, flake8
+    isort --check-only sshmng tests
+    black -S -l 88 --check sshmng tests
+    flake8 sshmng tests
+
+format: ## formatting with isort and black
+    isort sshmng tests
+    black -S -l 88 sshmng tests
